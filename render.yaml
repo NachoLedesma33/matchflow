@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: matchflow-backend
+    env: node
+    region: us-east
+    buildCommand: cd backend && npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: REDIS_URL
+        sync: true
+      - key: FRONTEND_URL
+        value: https://matchflow.vercel.app
+        sync: false

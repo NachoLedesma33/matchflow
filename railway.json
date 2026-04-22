@@ -1,0 +1,17 @@
+{
+  "build": {
+    "builder": "nixpacks",
+    "nixpacksVersion": "1.27.2",
+    "buildCommand": "cd backend && npm install && npm run build",
+    "startCommand": "cd backend && npm run start",
+    "env": {}
+  },
+  "deploy": {
+    "region": "us-east",
+    "numOfReplicas": 1,
+    "pause": true
+  },
+  "builder": {
+    "name": "nixpacks"
+  }
+}

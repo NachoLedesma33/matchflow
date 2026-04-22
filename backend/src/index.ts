@@ -11,13 +11,15 @@ import { MatchResult, MatchMode } from './types';
 const PORT = process.env.PORT || 3001;
 const REDIS_URL = process.env.REDIS_URL || undefined;
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: FRONTEND_URL,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
