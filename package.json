@@ -1,31 +1,18 @@
 {
   "name": "matchflow",
   "version": "1.0.0",
-  "description": "Real-time matchmaking system with hybrid algorithms",
+  "description": "Real-time matchmaking system",
   "private": true,
-  "workspaces": [
-    "backend",
-    "frontend"
-  ],
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
-    "dev:backend": "npm run dev -w backend",
-    "dev:frontend": "npm run dev -w frontend",
-    "build": "npm run build -w backend && npm run build -w frontend",
-    "build:backend": "npm run build -w backend",
-    "build:frontend": "npm run build -w frontend",
-    "start": "npm run start -w backend",
-    "lint": "npm run lint -w backend && npm run lint -w frontend"
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev",
+    "build:backend": "cd backend && npm run build",
+    "build:frontend": "cd frontend && npm run build",
+    "build": "npm run build:backend && npm run build:frontend",
+    "start": "cd backend && npm run start"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
-  },
-  "keywords": [
-    "matchmaking",
-    "glicko",
-    "real-time",
-    "socket.io"
-  ],
-  "author": "",
-  "license": "ISC"
+  }
 }
