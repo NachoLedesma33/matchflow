@@ -18,6 +18,7 @@ export interface UserProfile {
   skillRating: Rating;
   personality: number;
   scheduleOverlap: number[];
+  language: string;
   location: { lat: number; lng: number };
   reputation: number;
   tags: string[];
