@@ -5,6 +5,9 @@
   "installCommand": "npm install",
   "devCommand": "npm run dev",
   "env": {
-    "VITE_BACKEND_URL": "https://matchflow-backend-production.up.railway.app"
-  }
+    "VITE_API_URL": "@VITE_API_URL"
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
