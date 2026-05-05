@@ -52,7 +52,12 @@ app.get('/api', (_req, res) => {
 });
 
 app.get('/', (_req, res) => {
-res.sendFile(path.join(frontendPath, 'index.html'));
+  res.json({
+    name: 'MatchFlow API',
+    version: '1.0.0',
+    status: 'running',
+    frontend: 'Deployado en Vercel',
+  });
 });
 
 async function initializeServices() {

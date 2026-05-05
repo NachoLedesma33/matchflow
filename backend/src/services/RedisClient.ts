@@ -28,9 +28,11 @@ export class RedisClient {
   private isInMemory: boolean = false;
 
   private constructor(redisUrl?: string) {
-    // Si no hay REDIS_URL o está vacío, usar en memoria directamente
-    if (!redisUrl || redisUrl === '' || redisUrl === 'undefined') {
-      console.log('No REDIS_URL, using in-memory store');
+    const isProduction = process.env.NODE_ENV === 'production';
+    
+    // Usar siempre en memoria en producción
+    if (!redisUrl || redisUrl === '' || isProduction) {
+      console.log('Using in-memory store (production)');
       this.client = inMemory;
       this.isInMemory = true;
       return;
