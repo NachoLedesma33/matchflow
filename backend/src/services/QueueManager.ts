@@ -10,7 +10,19 @@ export class QueueManager {
   private readonly PRIORITY_INCREMENT = 0.02;
 
   constructor(redisUrl?: string) {
-    this.redis = redisUrl ? new Redis(redisUrl) : new Redis();
+    // Silenciar errores de Redis en producción
+    this.redis = redisUrl ? new Redis(redisUrl, {
+      retryStrategy: () => null,
+      maxRetriesPerRequest: 0,
+      enableOfflineQueue: false,
+    }) : new Redis({
+      retryStrategy: () => null,
+      maxRetriesPerRequest: 0,
+      enableOfflineQueue: false,
+    });
+    
+    // Silenciar errores
+    this.redis.on('error', () => {});
   }
 
   async addToQueue(userId: string, entry: QueueEntry): Promise<void> {
