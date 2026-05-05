@@ -1,10 +1,8 @@
 import { Router, Request, Response } from 'express';
-import Redis from 'ioredis';
 import axios from 'axios';
 import crypto from 'crypto';
 
 const router = Router();
-const redis = new Redis();
 
 const WEBHOOK_PREFIX = 'webhook:config';
 const WEBHOOK_LOG_PREFIX = 'webhook:log';
@@ -25,6 +23,9 @@ interface WebhookPayload {
   timestamp: number;
   event: string;
 }
+
+const webhookStore = new Map<string, WebhookConfig>();
+const webhookLogStore = new Map<string, string[]>();
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 3000, 5000];
@@ -63,7 +64,7 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
       active: true
     };
 
-    await redis.set(`${WEBHOOK_PREFIX}:${webhookId}`, JSON.stringify(config));
+    webhookStore.set(webhookId, config);
 
     res.status(201).json({
       id: webhookId,
@@ -75,10 +76,10 @@ router.post('/webhooks/register', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/webhooks/test', async (req: Request, res: Response) => {
+router.get('/webhooks/test', async (_req: Request, res: Response) => {
   try {
-    const keys = await redis.keys(`${WEBHOOK_PREFIX}:*`);
-    if (keys.length === 0) {
+    const webhooks = Array.from(webhookStore.values());
+    if (webhooks.length === 0) {
       res.status(404).json({ error: 'No webhooks registered' });
       return;
     }
@@ -93,11 +94,7 @@ router.get('/webhooks/test', async (req: Request, res: Response) => {
 
     const results = [];
 
-    for (const key of keys) {
-      const configJson = await redis.get(key);
-      if (!configJson) continue;
-
-      const config: WebhookConfig = JSON.parse(configJson);
+    for (const config of webhooks) {
       if (!config.active) continue;
 
       const signature = signPayload(testPayload, config.secret);
@@ -113,7 +110,7 @@ router.get('/webhooks/test', async (req: Request, res: Response) => {
         });
 
         results.push({ webhookId: config.id, status: 'success' });
-      } catch (err) {
+      } catch (err: any) {
         results.push({ webhookId: config.id, status: 'failed', error: err.message });
       }
     }
@@ -126,16 +123,11 @@ router.get('/webhooks/test', async (req: Request, res: Response) => {
 
 router.get('/webhooks', async (_req: Request, res: Response) => {
   try {
-    const keys = await redis.keys(`${WEBHOOK_PREFIX}:*`);
-    const webhooks: WebhookConfig[] = [];
+    const webhooks: Omit<WebhookConfig, 'secret'>[] = [];
 
-    for (const key of keys) {
-      const configJson = await redis.get(key);
-      if (configJson) {
-        const config = JSON.parse(configJson);
-        delete config.secret;
-        webhooks.push(config);
-      }
+    for (const config of webhookStore.values()) {
+      const { secret, ...configWithoutSecret } = config;
+      webhooks.push(configWithoutSecret);
     }
 
     res.json({ webhooks });
@@ -146,16 +138,14 @@ router.get('/webhooks', async (_req: Request, res: Response) => {
 
 router.delete('/webhooks/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const key = `${WEBHOOK_PREFIX}:${id}`;
+    const id = req.params.id as string;
 
-    const exists = await redis.exists(key);
-    if (!exists) {
+    if (!webhookStore.has(id)) {
       res.status(404).json({ error: 'Webhook not found' });
       return;
     }
 
-    await redis.del(key);
+    webhookStore.delete(id);
     res.json({ message: 'Webhook deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete webhook' });
@@ -163,13 +153,7 @@ router.delete('/webhooks/:id', async (req: Request, res: Response) => {
 });
 
 export async function triggerWebhook(event: string, payload: WebhookPayload): Promise<void> {
-  const keys = await redis.keys(`${WEBHOOK_PREFIX}:*`);
-
-  for (const key of keys) {
-    const configJson = await redis.get(key);
-    if (!configJson) continue;
-
-    const config: WebhookConfig = JSON.parse(configJson);
+  for (const config of webhookStore.values()) {
     if (!config.active) continue;
     if (!config.events.includes(event)) continue;
 
@@ -187,7 +171,7 @@ export async function triggerWebhook(event: string, payload: WebhookPayload): Pr
         await axios.post(config.url, payload, { headers, timeout: 5000 });
         success = true;
         break;
-      } catch (err) {
+      } catch (err: any) {
         console.log(`Webhook attempt ${attempt + 1} failed:`, err.message);
         if (attempt < MAX_RETRIES - 1) {
           await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
@@ -213,8 +197,9 @@ async function logWebhookCall(
     timestamp: Date.now()
   });
 
-  await redis.lpush(logKey, logEntry);
-  await redis.ltrim(logKey, 0, 99);
+  const logs = webhookLogStore.get(logKey) || [];
+  logs.unshift(logEntry);
+  webhookLogStore.set(logKey, logs.slice(0, 100));
 }
 
 export default router;

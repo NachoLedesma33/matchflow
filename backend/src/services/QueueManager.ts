@@ -1,95 +1,106 @@
-import Redis from 'ioredis';
 import { QueueEntry, MatchMode, TeamSize } from '../types';
 
+interface InMemoryQueue {
+  data: Map<string, { score: number; value: string }[]>;
+  userKeys: Map<string, string>;
+  timestamps: Map<string, number>;
+}
+
 export class QueueManager {
-  private redis: Redis;
+  private inMemory: InMemoryQueue;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   private readonly QUEUE_PREFIX = 'queue';
   private readonly PRIORITY_INTERVAL = 10000;
   private readonly MAX_PRIORITY_BONUS = 0.5;
   private readonly PRIORITY_INCREMENT = 0.02;
 
-  constructor(redisUrl?: string) {
-    // Silenciar errores de Redis en producción
-    this.redis = redisUrl ? new Redis(redisUrl, {
-      retryStrategy: () => null,
-      maxRetriesPerRequest: 0,
-      enableOfflineQueue: false,
-    }) : new Redis({
-      retryStrategy: () => null,
-      maxRetriesPerRequest: 0,
-      enableOfflineQueue: false,
-    });
-    
-    // Silenciar errores
-    this.redis.on('error', () => {});
+  constructor(_redisUrl?: string) {
+    this.inMemory = {
+      data: new Map(),
+      userKeys: new Map(),
+      timestamps: new Map()
+    };
   }
 
   async addToQueue(userId: string, entry: QueueEntry): Promise<void> {
     const mode: MatchMode = entry.teamMembers ? 'ranked-flex' : 'ranked-solo';
-    const key = this.getQueueKey(mode, (entry.teamMembers?.length || 1) as TeamSize);
+    const key = `${this.QUEUE_PREFIX}:${mode}:${entry.teamMembers?.length || 1}`;
     const scoredEntry = {
       ...entry,
       priorityBonus: Math.min(entry.priorityBonus, this.MAX_PRIORITY_BONUS)
     };
-    await this.redis.zadd(key, scoredEntry.priorityBonus, JSON.stringify(scoredEntry));
 
-    if (entry.teamMembers) {
-      for (const memberId of entry.teamMembers) {
-        await this.redis.set(`${this.QUEUE_PREFIX}:user:${memberId}`, key);
-      }
-    }
-    await this.redis.set(`${this.QUEUE_PREFIX}:user:${userId}`, key);
-    await this.redis.zadd(`${this.QUEUE_PREFIX}:ts:${key}`, Date.now(), userId);
+    const queue = this.inMemory.data.get(key) || [];
+    queue.push({ score: scoredEntry.priorityBonus, value: JSON.stringify(scoredEntry) });
+    queue.sort((a, b) => b.score - a.score);
+    this.inMemory.data.set(key, queue);
+    
+    this.inMemory.userKeys.set(userId, key);
+    this.inMemory.timestamps.set(`${key}:${userId}`, Date.now());
   }
 
   async removeFromQueue(userId: string): Promise<QueueEntry | null> {
-    const key = await this.redis.get(`${this.QUEUE_PREFIX}:user:${userId}`);
+    const key = this.inMemory.userKeys.get(userId);
     if (!key) return null;
 
-    const entryData = await this.redis.zscore(key, userId);
-    if (!entryData) return null;
+    const queue = this.inMemory.data.get(key) || [];
+    const idx = queue.findIndex(q => JSON.parse(q.value).userId === userId);
+    if (idx === -1) return null;
 
-    const entry = JSON.parse(entryData) as QueueEntry;
-    await this.redis.zrem(key, userId);
-    await this.redis.del(`${this.QUEUE_PREFIX}:user:${userId}`);
-    await this.redis.zrem(`${this.QUEUE_PREFIX}:ts:${key}`, userId);
+    const entry = JSON.parse(queue[idx].value) as QueueEntry;
+    queue.splice(idx, 1);
+    this.inMemory.data.set(key, queue);
+    this.inMemory.userKeys.delete(userId);
+    this.inMemory.timestamps.delete(`${key}:${userId}`);
 
     return entry;
   }
 
   async getQueueSize(mode: MatchMode, teamSize: TeamSize): Promise<number> {
-    const key = this.getQueueKey(mode, teamSize);
-    return this.redis.zcard(key);
+    const key = `${this.QUEUE_PREFIX}:${mode}:${teamSize}`;
+    return (this.inMemory.data.get(key) || []).length;
   }
 
   async getWaitingTime(userId: string): Promise<number | null> {
-    const timestamp = await this.redis.zscore(`${this.QUEUE_PREFIX}:ts:*`, userId);
+    const key = this.inMemory.userKeys.get(userId);
+    if (!key) return null;
+    const timestamp = this.inMemory.timestamps.get(`${key}:${userId}`);
     if (!timestamp) return null;
-    return (Date.now() - parseInt(timestamp)) / 1000;
+    return (Date.now() - timestamp) / 1000;
   }
 
   async getCandidates(mode: MatchMode, teamSize: TeamSize, limit: number = 50): Promise<QueueEntry[]> {
-    const key = this.getQueueKey(mode, teamSize);
-    const entries = await this.redis.zrevrange(key, 0, limit - 1);
-    return entries.map(e => JSON.parse(e) as QueueEntry);
+    const key = `${this.QUEUE_PREFIX}:${mode}:${teamSize}`;
+    const queue = this.inMemory.data.get(key) || [];
+    return queue.slice(0, limit).map(q => JSON.parse(q.value) as QueueEntry);
   }
 
   async getAllQueues(): Promise<{ mode: MatchMode; teamSize: TeamSize; count: number }[]> {
     const modes: MatchMode[] = ['ranked-solo', 'ranked-flex', 'casual', 'tournament'];
-    const sizes: TeamSize[] = [1, 2, 3];
+    const sizes: TeamSize[] = [1, 2, 3, 4, 5];
     const result: { mode: MatchMode; teamSize: TeamSize; count: number }[] = [];
 
     for (const mode of modes) {
       for (const size of sizes) {
-        const count = await this.getQueueSize(mode, size);
-        result.push({ mode, teamSize: size, count });
+        const count = await this.getQueueSize(mode, size as TeamSize);
+        if (count > 0) {
+          result.push({ mode, teamSize: size as TeamSize, count });
+        }
       }
     }
+
     return result;
   }
 
-  startHeartbeat(interval: number = this.PRIORITY_INTERVAL): void {
+  private getQueueKey(mode: MatchMode, teamSize: TeamSize): string {
+    return `${this.QUEUE_PREFIX}:${mode}:${teamSize}`;
+  }
+
+  async disconnect(): Promise<void> {
+    this.stopHeartbeat();
+  }
+
+startHeartbeat(interval: number = this.PRIORITY_INTERVAL): void {
     if (this.heartbeatInterval) return;
 
     this.heartbeatInterval = setInterval(async () => {
@@ -105,30 +116,15 @@ export class QueueManager {
   }
 
   private async updatePriorities(): Promise<void> {
-    const modes: MatchMode[] = ['ranked-solo', 'ranked-flex', 'casual', 'tournament'];
-    const sizes: TeamSize[] = [1, 2, 3];
-
-    for (const mode of modes) {
-      for (const size of sizes) {
-        const key = this.getQueueKey(mode, size);
-        const entries = await this.redis.zrange(key, 0, -1);
-
-        for (const entryData of entries) {
-          const entry = JSON.parse(entryData) as QueueEntry;
-          const newBonus = Math.min(entry.priorityBonus + this.PRIORITY_INCREMENT, this.MAX_PRIORITY_BONUS);
-          entry.priorityBonus = newBonus;
-          await this.redis.zadd(key, newBonus, JSON.stringify(entry));
-        }
+    const now = Date.now();
+    for (const [key, queue] of this.inMemory.data) {
+      for (const item of queue) {
+        const entry = JSON.parse(item.value) as QueueEntry;
+        const waitTime = now - entry.timestamp;
+        const bonus = Math.min(waitTime / 60000 * this.PRIORITY_INCREMENT, this.MAX_PRIORITY_BONUS);
+        item.score = entry.priorityBonus + bonus;
       }
+      queue.sort((a, b) => b.score - a.score);
     }
-  }
-
-  private getQueueKey(mode: MatchMode, teamSize: any): string {
-    return `${this.QUEUE_PREFIX}:${mode}:${teamSize}`;
-  }
-
-  async disconnect(): Promise<void> {
-    this.stopHeartbeat();
-    await this.redis.quit();
   }
 }

@@ -1,5 +1,3 @@
-import Redis from 'ioredis';
-
 export interface NotificationPayload {
   title: string;
   body: string;
@@ -15,20 +13,17 @@ export interface UserNotificationPreferences {
   lastSeen: number;
 }
 
+const lastSeenStore = new Map<string, number>();
+const prefsStore = new Map<string, UserNotificationPreferences>();
+
 export class NotificationService {
-  private redis: Redis;
-  private readonly PREF_PREFIX = 'notification:prefs';
-  private readonly LAST_SEEN_PREFIX = 'user:lastseen';
   private readonly OFFLINE_THRESHOLD = 30000;
 
-  constructor(redisUrl?: string) {
-    this.redis = redisUrl ? new Redis(redisUrl) : new Redis();
-  }
+  constructor(_redisUrl?: string) {}
 
   async sendWebSocket(userId: string, event: string, data: unknown): Promise<void> {
-    const key = `${this.LAST_SEEN_PREFIX}:${userId}`;
-    const lastSeen = await this.redis.get(key);
-    const isOnline = lastSeen && (Date.now() - parseInt(lastSeen)) < this.OFFLINE_THRESHOLD;
+    const lastSeen = lastSeenStore.get(userId);
+    const isOnline = lastSeen && (Date.now() - lastSeen) < this.OFFLINE_THRESHOLD;
 
     if (!isOnline) {
       await this.sendPushNotification(userId, event, JSON.stringify(data));
@@ -122,24 +117,20 @@ export class NotificationService {
   }
 
   async updateLastSeen(userId: string): Promise<void> {
-    await this.redis.set(
-      `${this.LAST_SEEN_PREFIX}:${userId}`,
-      Date.now().toString()
-    );
+    lastSeenStore.set(userId, Date.now());
   }
 
   async isUserOnline(userId: string): Promise<boolean> {
-    const lastSeen = await this.redis.get(`${this.LAST_SEEN_PREFIX}:${userId}`);
+    const lastSeen = lastSeenStore.get(userId);
     if (!lastSeen) return false;
-    return (Date.now() - parseInt(lastSeen)) < this.OFFLINE_THRESHOLD;
+    return (Date.now() - lastSeen) < this.OFFLINE_THRESHOLD;
   }
 
   async getPreferences(userId: string): Promise<UserNotificationPreferences> {
-    const key = `${this.PREF_PREFIX}:${userId}`;
-    const prefsJson = await this.redis.get(key);
+    const prefs = prefsStore.get(userId);
 
-    if (prefsJson) {
-      return JSON.parse(prefsJson);
+    if (prefs) {
+      return prefs;
     }
 
     return {
@@ -152,30 +143,23 @@ export class NotificationService {
   }
 
   async setPreferences(prefs: UserNotificationPreferences): Promise<void> {
-    const key = `${this.PREF_PREFIX}:${prefs.userId}`;
-    await this.redis.set(key, JSON.stringify(prefs));
+    prefsStore.set(prefs.userId, prefs);
   }
 
   async getStats(): Promise<{ online: number; offline: number }> {
-    const keys = await this.redis.keys(`${this.LAST_SEEN_PREFIX}:*`);
     let online = 0;
     let offline = 0;
 
-    for (const key of keys) {
-      const lastSeen = await this.redis.get(key);
-      if (lastSeen) {
-        if ((Date.now() - parseInt(lastSeen)) < this.OFFLINE_THRESHOLD) {
-          online++;
-        } else {
-          offline++;
-        }
+    for (const lastSeen of lastSeenStore.values()) {
+      if ((Date.now() - lastSeen) < this.OFFLINE_THRESHOLD) {
+        online++;
+      } else {
+        offline++;
       }
     }
 
     return { online, offline };
   }
 
-  async disconnect(): Promise<void> {
-    await this.redis.quit();
-  }
+  async disconnect(): Promise<void> {}
 }

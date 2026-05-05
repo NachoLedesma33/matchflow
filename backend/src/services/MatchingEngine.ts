@@ -1,4 +1,3 @@
-import Redis from 'ioredis';
 import { QueueManager } from './QueueManager';
 import { HybridMatcher } from '../algorithms/HybridMatcher';
 import { balanceTeams, calculateTeamSkill, calculateSkillDifference, TeamBalancer } from './TeamBalancer';
@@ -21,8 +20,10 @@ interface MatchJob {
   teamMembers?: string[];
 }
 
+const matchHistoryStore: MatchResult[] = [];
+const matchStore = new Map<string, { data: MatchResult; expiry: number }>();
+
 export class MatchingEngine {
-  private redis: Redis;
   private queueManager: QueueManager;
   private matcher: HybridMatcher;
   private scoreCalculator: ScoreCalculator;
@@ -37,9 +38,8 @@ export class MatchingEngine {
     tournament: 60000
   };
 
-  constructor(redisUrl?: string) {
-    this.redis = redisUrl ? new Redis(redisUrl) : new Redis();
-    this.queueManager = new QueueManager(redisUrl);
+  constructor(_redisUrl?: string) {
+    this.queueManager = new QueueManager();
     this.matcher = new HybridMatcher();
     this.scoreCalculator = new ScoreCalculator();
   }
@@ -130,7 +130,7 @@ export class MatchingEngine {
     player: MatchJob,
     candidates: MatchJob[],
     filters: MatchFilters,
-    mode: MatchMode
+    _mode: MatchMode
   ): Promise<MatchJob[]> {
     const suitable: MatchJob[] = [];
 
@@ -152,25 +152,12 @@ export class MatchingEngine {
   private applyCrossFilters(
     user: UserProfile,
     candidate: UserProfile,
-    filters: MatchFilters
+    _filters: MatchFilters
   ): boolean {
     if (candidate.id === user.id) return false;
     if (user.blacklist.includes(candidate.id)) return false;
     if (candidate.blacklist.includes(user.id)) return false;
     if (candidate.reputation < 30) return false;
-
-    if (filters.minLevel !== undefined) {
-      if (candidate.skillRating.rating < filters.minLevel) return false;
-    }
-    if (filters.maxLevel !== undefined) {
-      if (candidate.skillRating.rating > filters.maxLevel) return false;
-    }
-    if (filters.requiredTags && filters.requiredTags.length > 0) {
-      const hasAllTags = filters.requiredTags.every(tag =>
-        candidate.tags.includes(tag)
-      );
-      if (!hasAllTags) return false;
-    }
 
     return true;
   }
@@ -205,21 +192,15 @@ export class MatchingEngine {
   }
 
   private async saveMatch(match: MatchResult): Promise<void> {
-    await this.redis.setex(
-      `match:${match.matchId}`,
-      3600,
-      JSON.stringify(match)
-    );
-
-    const matchHistory = await this.redis.lrange('match:history', 0, 99);
-    matchHistory.unshift(JSON.stringify(match));
-    await this.redis.ltrim('match:history', 0, 99);
+    matchStore.set(match.matchId, { data: match, expiry: Date.now() + 3600 * 1000 });
+    matchHistoryStore.unshift(match);
+    if (matchHistoryStore.length > 100) {
+      matchHistoryStore.pop();
+    }
   }
 
   private async notifyMatch(match: MatchResult): Promise<void> {
-    const key = `match:${match.matchId}`;
-    const socketIds = match.players.map(p => `user:${p}`);
-    this.redis.publish('match:notify', JSON.stringify({ match, socketIds }));
+    console.log(`[Match] ${match.matchId} - players: ${match.players.join(', ')}`);
   }
 
   private async removeFromQueue(userId: string): Promise<void> {
@@ -227,8 +208,7 @@ export class MatchingEngine {
   }
 
   async getMatchHistory(limit: number = 10): Promise<MatchResult[]> {
-    const history = await this.redis.lrange('match:history', 0, limit - 1);
-    return history.map(h => JSON.parse(h) as MatchResult);
+    return matchHistoryStore.slice(0, limit);
   }
 
   async getQueueStats(): Promise<{ mode: MatchMode; teamSize: TeamSize; count: number }[]> {
@@ -238,6 +218,5 @@ export class MatchingEngine {
   async shutdown(): Promise<void> {
     this.stop();
     await this.queueManager.disconnect();
-    await this.redis.quit();
   }
 }

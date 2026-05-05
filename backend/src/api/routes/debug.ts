@@ -1,14 +1,11 @@
 import { Router, Request, Response } from 'express';
-import Redis from 'ioredis';
 import { UserProfile, Weights, MatchResult, QueueEntry, MatchMode, TeamSize } from '../../types';
 
 const router = Router();
-const redis = new Redis();
 
 const USER_PREFIX = 'user:profile';
 const QUEUE_PREFIX = 'queue';
 const MATCH_PREFIX = 'match:id';
-const STATS_PREFIX = 'user:stats';
 const DEBUG_PREFIX = 'debug:session';
 
 interface SimulationStats {
@@ -20,6 +17,11 @@ interface SimulationStats {
   maxWaitTime: number;
   scoreStdDev: number;
 }
+
+const userStore = new Map<string, UserProfile>();
+const queueStore = new Map<string, { score: number; entry: string }[]>();
+const matchStore = new Map<string, MatchResult>();
+const debugStore = new Map<string, string>();
 
 const LANGUAGES = ['en', 'es', 'fr', 'de', 'pt', 'it', 'ru', 'zh', 'ja', 'ko'];
 const TAGS = ['fps', 'rts', 'moba', 'card', 'puzzle', 'racing', 'sports', 'strategy'];
@@ -95,14 +97,14 @@ router.post('/debug/simulate', async (req: Request, res: Response) => {
       return;
     }
 
-    await redis.set(`${DEBUG_PREFIX}:start`, Date.now().toString());
-    await redis.set(`${DEBUG_PREFIX}:users`, '0');
-    await redis.set(`${DEBUG_PREFIX}:matches`, '0');
+    debugStore.set('start', Date.now().toString());
+    debugStore.set('users', '0');
+    debugStore.set('matches', '0');
 
     const users: UserProfile[] = [];
     for (let i = 0; i < userCount; i++) {
       const user = generateRandomUser();
-      await redis.set(`${USER_PREFIX}:${user.id}`, JSON.stringify(user));
+      userStore.set(user.id, user);
       users.push(user);
 
       const queueEntry: QueueEntry = {
@@ -112,10 +114,12 @@ router.post('/debug/simulate', async (req: Request, res: Response) => {
       };
 
       const queueKey = `${QUEUE_PREFIX}:${mode}:${teamSize}`;
-      await redis.zadd(queueKey, 0, JSON.stringify(queueEntry));
+      const queue = queueStore.get(queueKey) || [];
+      queue.push({ score: 0, entry: JSON.stringify(queueEntry) });
+      queueStore.set(queueKey, queue);
     }
 
-    await redis.set(`${DEBUG_PREFIX}:users`, userCount.toString());
+    debugStore.set('users', userCount.toString());
 
     res.json({
       message: `Created ${userCount} users and added to queue`,
@@ -134,30 +138,16 @@ router.get('/debug/metrics', async (_req: Request, res: Response) => {
       return;
     }
 
-    const startTime = await redis.get(`${DEBUG_PREFIX}:start`);
-    const totalUsers = parseInt(await redis.get(`${DEBUG_PREFIX}:users`) || '0');
-    const matchesCreated = parseInt(await redis.get(`${DEBUG_PREFIX}:matches`) || '0');
+    const startTime = debugStore.get('start');
+    const totalUsers = parseInt(debugStore.get('users') || '0');
+    const matchesCreated = parseInt(debugStore.get('matches') || '0');
 
-    const matchKeys = await redis.keys(`${MATCH_PREFIX}:*`);
+    const matches = Array.from(matchStore.values());
     const scores: number[] = [];
     const waitTimes: number[] = [];
 
-    for (const key of matchKeys) {
-      const matchJson = await redis.get(key);
-      if (matchJson) {
-        const match: MatchResult = JSON.parse(matchJson);
-        scores.push(match.score);
-
-        for (const playerId of match.players) {
-          const queueKey = await redis.get(`queue:key:${playerId}`);
-          if (queueKey) {
-            const ts = await redis.zscore(`${QUEUE_PREFIX}:ts:${queueKey}`, playerId);
-            if (ts) {
-              waitTimes.push((match.timestamp - parseInt(ts)) / 1000);
-            }
-          }
-        }
-      }
+    for (const match of matches) {
+      scores.push(match.score);
     }
 
     const avgWaitTime = waitTimes.length > 0
@@ -198,25 +188,8 @@ router.get('/debug/export', async (_req: Request, res: Response) => {
       return;
     }
 
-    const users: UserProfile[] = [];
-    const userKeys = await redis.keys(`${USER_PREFIX}:*`);
-
-    for (const key of userKeys) {
-      const userJson = await redis.get(key);
-      if (userJson) {
-        users.push(JSON.parse(userJson));
-      }
-    }
-
-    const matches: MatchResult[] = [];
-    const matchKeys = await redis.keys(`${MATCH_PREFIX}:*`);
-
-    for (const key of matchKeys) {
-      const matchJson = await redis.get(key);
-      if (matchJson) {
-        matches.push(JSON.parse(matchJson));
-      }
-    }
+    const users = Array.from(userStore.values());
+    const matches = Array.from(matchStore.values());
 
     const exportData = {
       exportedAt: Date.now(),
@@ -239,14 +212,10 @@ router.post('/debug/reset', async (_req: Request, res: Response) => {
       return;
     }
 
-    const userKeys = await redis.keys(`${USER_PREFIX}:*`);
-    const queueKeys = await redis.keys(`${QUEUE_PREFIX}:*`);
-    const matchKeys = await redis.keys(`${MATCH_PREFIX}:*`);
-    const debugKeys = await redis.keys(`${DEBUG_PREFIX}:*`);
-
-    for (const key of [...userKeys, ...queueKeys, ...matchKeys, ...debugKeys]) {
-      await redis.del(key);
-    }
+    userStore.clear();
+    queueStore.clear();
+    matchStore.clear();
+    debugStore.clear();
 
     res.json({ message: 'Debug state reset successfully' });
   } catch (error) {

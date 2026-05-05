@@ -1,9 +1,7 @@
 import { Router, Request, Response } from 'express';
-import Redis from 'ioredis';
 import { UserProfile, Weights } from '../../types';
 
 const router = Router();
-const redis = new Redis();
 
 const USER_PREFIX = 'user:profile';
 const MATCH_PREFIX = 'user:matches';
@@ -18,6 +16,10 @@ interface UserStats {
   acceptanceRate: number;
   eloHistory: { timestamp: number; rating: number }[];
 }
+
+const userStore = new Map<string, UserProfile>();
+const matchHistoryStore = new Map<string, string[]>();
+const statsStore = new Map<string, UserStats>();
 
 function generateId(): string {
   return `user_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -64,7 +66,7 @@ router.post('/users', async (req: Request, res: Response) => {
       weights: defaultWeights
     };
 
-    await redis.set(`${USER_PREFIX}:${userId}`, JSON.stringify(profile));
+    userStore.set(userId, profile);
 
     const defaultStats: UserStats = {
       totalMatches: 0,
@@ -75,7 +77,7 @@ router.post('/users', async (req: Request, res: Response) => {
       acceptanceRate: 100,
       eloHistory: [{ timestamp: Date.now(), rating: profile.skillRating.rating }]
     };
-    await redis.set(`${STATS_PREFIX}:${userId}`, JSON.stringify(defaultStats));
+    statsStore.set(userId, defaultStats);
 
     res.status(201).json(profile);
   } catch (error) {
@@ -85,15 +87,14 @@ router.post('/users', async (req: Request, res: Response) => {
 
 router.get('/users/:id', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const profileJson = await redis.get(`${USER_PREFIX}:${id}`);
+    const id = req.params.id as string;
+    const profile = userStore.get(id);
 
-    if (!profileJson) {
+    if (!profile) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const profile = JSON.parse(profileJson);
     res.json(profile);
   } catch (error) {
     res.status(500).json({ error: 'Failed to get user' });
@@ -102,19 +103,17 @@ router.get('/users/:id', async (req: Request, res: Response) => {
 
 router.put('/users/:id/weights', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { weights } = req.body;
 
-    const profileJson = await redis.get(`${USER_PREFIX}:${id}`);
-    if (!profileJson) {
+    const profile = userStore.get(id);
+    if (!profile) {
       res.status(404).json({ error: 'User not found' });
       return;
     }
 
-    const profile: UserProfile = JSON.parse(profileJson);
     profile.weights = weights;
-
-    await redis.set(`${USER_PREFIX}:${id}`, JSON.stringify(profile));
+    userStore.set(id, profile);
     res.json(profile);
   } catch (error) {
     res.status(500).json({ error: 'Failed to update weights' });
@@ -123,11 +122,11 @@ router.put('/users/:id/weights', async (req: Request, res: Response) => {
 
 router.get('/users/:id/history', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const limit = parseInt(req.query.limit as string) || 20;
 
-    const matchesJson = await redis.lrange(`${MATCH_PREFIX}:${id}`, 0, limit - 1);
-    const matches = matchesJson.map(m => JSON.parse(m));
+    const matchesJson = matchHistoryStore.get(id) || [];
+    const matches = matchesJson.slice(0, limit).map(m => JSON.parse(m));
 
     res.json({ userId: id, matches });
   } catch (error) {
@@ -137,15 +136,13 @@ router.get('/users/:id/history', async (req: Request, res: Response) => {
 
 router.get('/users/:id/stats', async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const statsJson = await redis.get(`${STATS_PREFIX}:${id}`);
+    const id = req.params.id as string;
+    const stats = statsStore.get(id);
 
-    if (!statsJson) {
+    if (!stats) {
       res.status(404).json({ error: 'User stats not found' });
       return;
     }
-
-    const stats: UserStats = JSON.parse(statsJson);
 
     const eloHistory = stats.eloHistory.slice(-30);
     const eloGraph = eloHistory.map((e, i) => ({
@@ -172,16 +169,7 @@ router.get('/users/:id/stats', async (req: Request, res: Response) => {
 
 router.get('/users', async (_req: Request, res: Response) => {
   try {
-    const keys = await redis.keys(`${USER_PREFIX}:*`);
-    const users: UserProfile[] = [];
-
-    for (const key of keys) {
-      const profileJson = await redis.get(key);
-      if (profileJson) {
-        users.push(JSON.parse(profileJson));
-      }
-    }
-
+    const users = Array.from(userStore.values());
     res.json({ users, count: users.length });
   } catch (error) {
     res.status(500).json({ error: 'Failed to list users' });

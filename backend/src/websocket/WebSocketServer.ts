@@ -1,6 +1,5 @@
 import { Server } from 'socket.io';
 import { Server as HttpServer } from 'http';
-import Redis from 'ioredis';
 import { QueueManager } from '../services/QueueManager';
 import { HybridMatcher } from '../algorithms/HybridMatcher';
 import { balanceTeams, TeamBalancer } from '../services/TeamBalancer';
@@ -28,15 +27,16 @@ interface UserState {
   teamMembers?: string[];
 }
 
+const userStateStore = new Map<string, { data: UserState; expiry: number }>();
+const matchStore = new Map<string, { data: MatchResult; expiry: number }>();
+
 export class WebSocketServer {
   private io: Server;
-  private redis: Redis;
   private queueManager: QueueManager;
   private matcher: HybridMatcher;
   private userStates: Map<string, UserState> = new Map();
   private userProfiles: Map<string, UserProfile> = new Map();
   private readonly STATE_TTL = 30;
-  private readonly STATE_PREFIX = 'user:state';
 
   constructor(httpServer: HttpServer) {
     this.io = new Server(httpServer, {
@@ -46,7 +46,6 @@ export class WebSocketServer {
       }
     });
 
-    this.redis = new Redis();
     this.queueManager = new QueueManager();
     this.matcher = new HybridMatcher();
 
@@ -95,16 +94,12 @@ export class WebSocketServer {
   }
 
   private async authenticateUser(socketId: string, userId: string): Promise<void> {
-    const stateJson = await this.redis.get(`${this.STATE_PREFIX}:${userId}`);
-    if (stateJson) {
-      const state = JSON.parse(stateJson) as UserState;
+    const stored = userStateStore.get(userId);
+    if (stored) {
+      const state = stored.data;
       state.socketId = socketId;
       this.userStates.set(socketId, state);
-      await this.redis.setex(
-        `${this.STATE_PREFIX}:${userId}`,
-        this.STATE_TTL,
-        JSON.stringify(state)
-      );
+      userStateStore.set(userId, { data: state, expiry: Date.now() + this.STATE_TTL * 1000 });
       this.io.to(socketId).emit('session-restored', state);
     } else {
       this.userStates.set(socketId, { userId, socketId });
@@ -154,7 +149,7 @@ export class WebSocketServer {
     if (state) {
       await this.queueManager.removeFromQueue(userId);
       this.userStates.delete(socketId);
-      await this.redis.del(`${this.STATE_PREFIX}:${userId}`);
+      userStateStore.delete(userId);
       this.io.to(socketId).emit('left-queue');
     }
   }
@@ -170,10 +165,10 @@ export class WebSocketServer {
   private async handleFeedback(feedback: Feedback): Promise<void> {
     console.log('Feedback received:', feedback);
 
-    const matchResultJson = await this.redis.get(`match:${feedback.matchId}`);
-    if (!matchResultJson) return;
+    const stored = matchStore.get(feedback.matchId);
+    if (!stored) return;
 
-    const matchResult = JSON.parse(matchResultJson);
+    const matchResult = stored.data;
 
     for (const playerId of matchResult.players) {
       const profile = this.userProfiles.get(playerId);
@@ -209,22 +204,18 @@ export class WebSocketServer {
   }
 
   private async handleReconnect(socketId: string, userId: string): Promise<void> {
-    const stateJson = await this.redis.get(`${this.STATE_PREFIX}:${userId}`);
-    if (stateJson) {
-      const state = JSON.parse(stateJson) as UserState;
+    const stored = userStateStore.get(userId);
+    if (stored) {
+      const state = stored.data;
       state.socketId = socketId;
       this.userStates.set(socketId, state);
-      await this.redis.del(`${this.STATE_PREFIX}:${userId}`);
+      userStateStore.delete(userId);
       this.io.to(socketId).emit('session-restored', state);
     }
   }
 
   private async saveState(userId: string, state: UserState): Promise<void> {
-    await this.redis.setex(
-      `${this.STATE_PREFIX}:${userId}`,
-      this.STATE_TTL,
-      JSON.stringify(state)
-    );
+    userStateStore.set(userId, { data: state, expiry: Date.now() + this.STATE_TTL * 1000 });
   }
 
   private async scheduleMatch(
@@ -280,11 +271,7 @@ export class WebSocketServer {
         }))
       };
 
-      await this.redis.setex(
-        `match:${matchResult.matchId}`,
-        3600,
-        JSON.stringify(matchResult)
-      );
+      matchStore.set(matchResult.matchId, { data: matchResult, expiry: Date.now() + 3600 * 1000 });
 
       this.matcher.recordMatch(userId, matchedUserId);
       this.matcher.recordMatch(matchedUserId, userId);
@@ -303,7 +290,6 @@ export class WebSocketServer {
   async shutdown(): Promise<void> {
     this.queueManager.stopHeartbeat();
     await this.queueManager.disconnect();
-    await this.redis.quit();
     this.io.close();
   }
 }

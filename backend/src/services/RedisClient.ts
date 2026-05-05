@@ -1,5 +1,3 @@
-import Redis from 'ioredis';
-
 const inMemoryStore = new Map<string, { value: string; expiry?: number }>();
 
 const inMemory = {
@@ -20,52 +18,23 @@ const inMemory = {
   keys: async () => Array.from(inMemoryStore.keys()),
   ping: async () => 'PONG',
   quit: async () => inMemoryStore.clear(),
+  exists: async (key: string) => inMemoryStore.has(key) ? 1 : 0,
 };
 
 export class RedisClient {
   private static instance: RedisClient;
-  private client: Redis | typeof inMemory;
-  private isInMemory: boolean = false;
+  private client: typeof inMemory;
+  private isInMemory: boolean = true;
 
-  private constructor(redisUrl?: string) {
-    const isProduction = process.env.NODE_ENV === 'production';
-    
-    // Usar siempre en memoria en producción
-    if (!redisUrl || redisUrl === '' || isProduction) {
-      console.log('Using in-memory store (production)');
-      this.client = inMemory;
-      this.isInMemory = true;
-      return;
-    }
-
-    try {
-      this.client = new Redis(redisUrl, {
-        lazyConnect: true,
-        retryStrategy: () => null,
-        maxRetriesPerRequest: 1,
-      });
-      
-      this.client.on('error', (err: Error) => {
-        console.log('Redis error, using in-memory:', err.message);
-        this.isInMemory = true;
-        this.client = inMemory;
-      });
-
-      (this.client as Redis).connect().catch(() => {
-        console.log('Redis unavailable, using in-memory');
-        this.isInMemory = true;
-        this.client = inMemory;
-      });
-    } catch {
-      console.log('Redis unavailable, using in-memory');
-      this.client = inMemory;
-      this.isInMemory = true;
-    }
+  private constructor(_redisUrl?: string) {
+    console.log('Using in-memory store');
+    this.client = inMemory;
+    this.isInMemory = true;
   }
 
-  static getInstance(redisUrl?: string): RedisClient {
+  static getInstance(_redisUrl?: string): RedisClient {
     if (!RedisClient.instance) {
-      RedisClient.instance = new RedisClient(redisUrl);
+      RedisClient.instance = new RedisClient(_redisUrl);
     }
     return RedisClient.instance;
   }
@@ -99,126 +68,93 @@ export class RedisClient {
   }
 
   async keys(pattern?: string) {
-    if (this.isInMemory) {
-      if (!pattern) return inMemoryStore.keys();
-      const regex = new RegExp(pattern.replace('*', '.*'));
-      return Array.from(inMemoryStore.keys()).filter(k => regex.test(k));
-    }
-    return (this.client as Redis).keys(pattern || '*');
+    if (!pattern) return Array.from(inMemoryStore.keys());
+    const regex = new RegExp(pattern.replace('*', '.*'));
+    return Array.from(inMemoryStore.keys()).filter(k => regex.test(k));
+  }
+
+  async exists(key: string) {
+    return this.client.exists(key);
   }
 
   async lpush(key: string, value: unknown) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      const list = existing ? JSON.parse(existing) : [];
-      list.unshift(JSON.stringify(value));
-      inMemoryStore.set(key, { value: JSON.stringify(list) });
-      return list.length;
-    }
-    return (this.client as Redis).lpush(key, JSON.stringify(value));
+    const existing = await inMemory.get(key);
+    const list = existing ? JSON.parse(existing) : [];
+    list.unshift(JSON.stringify(value));
+    inMemoryStore.set(key, { value: JSON.stringify(list) });
+    return list.length;
   }
 
   async lrange<T>(key: string, start: number, stop: number): Promise<T[]> {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return [];
-      const list = JSON.parse(existing);
-      return list.slice(start, stop === -1 ? undefined : stop + 1) as T[];
-    }
-    const items = await (this.client as Redis).lrange(key, start, stop);
-    return items.map(item => {
-      try { return JSON.parse(item); } catch { return item; }
-    }) as T[];
+    const existing = await inMemory.get(key);
+    if (!existing) return [];
+    const list = JSON.parse(existing);
+    return list.slice(start, stop === -1 ? undefined : stop + 1) as T[];
   }
 
   async ltrim(key: string, start: number, stop: number) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return;
-      const list = JSON.parse(existing);
-      const trimmed = stop === -1 ? list.slice(start) : list.slice(start, stop + 1);
-      inMemoryStore.set(key, { value: JSON.stringify(trimmed) });
-      return;
-    }
-    return (this.client as Redis).ltrim(key, start, stop);
+    const existing = await inMemory.get(key);
+    if (!existing) return;
+    const list = JSON.parse(existing);
+    const trimmed = stop === -1 ? list.slice(start) : list.slice(start, stop + 1);
+    inMemoryStore.set(key, { value: JSON.stringify(trimmed) });
+    return;
   }
 
   async zadd(key: string, score: number, member: unknown) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      const list: { score: number; member: string }[] = existing ? JSON.parse(existing) : [];
-      const idx = list.findIndex(m => m.member === JSON.stringify(member));
-      if (idx !== -1) list[idx] = { score, member: JSON.stringify(member) };
-      else list.push({ score, member: JSON.stringify(member) });
-      list.sort((a, b) => a.score - b.score);
-      inMemoryStore.set(key, { value: JSON.stringify(list) });
-      return 1;
-    }
-    return (this.client as Redis).zadd(key, score, JSON.stringify(member));
+    const existing = await inMemory.get(key);
+    const list: { score: number; member: string }[] = existing ? JSON.parse(existing) : [];
+    const idx = list.findIndex(m => m.member === JSON.stringify(member));
+    if (idx !== -1) list[idx] = { score, member: JSON.stringify(member) };
+    else list.push({ score, member: JSON.stringify(member) });
+    list.sort((a, b) => a.score - b.score);
+    inMemoryStore.set(key, { value: JSON.stringify(list) });
+    return 1;
   }
 
   async zscore(key: string, member: unknown) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return null;
-      const list: { score: number; member: string }[] = JSON.parse(existing);
-      const found = list.find(m => m.member === JSON.stringify(member));
-      return found ? String(found.score) : null;
-    }
-    return (this.client as Redis).zscore(key, JSON.stringify(member));
+    const existing = await inMemory.get(key);
+    if (!existing) return null;
+    const list: { score: number; member: string }[] = JSON.parse(existing);
+    const found = list.find(m => m.member === JSON.stringify(member));
+    return found ? String(found.score) : null;
   }
 
   async zrem(key: string, ...members: unknown[]) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return 0;
-      const list: { score: number; member: string }[] = JSON.parse(existing);
-      const original = list.length;
-      for (const m of members) {
-        const idx = list.findIndex(x => x.member === JSON.stringify(m));
-        if (idx !== -1) list.splice(idx, 1);
-      }
-      inMemoryStore.set(key, { value: JSON.stringify(list) });
-      return original - list.length;
+    const existing = await inMemory.get(key);
+    if (!existing) return 0;
+    const list: { score: number; member: string }[] = JSON.parse(existing);
+    const original = list.length;
+    for (const m of members) {
+      const idx = list.findIndex(x => x.member === JSON.stringify(m));
+      if (idx !== -1) list.splice(idx, 1);
     }
-    const args = members.map(m => JSON.stringify(m));
-    return (this.client as Redis).zrem(key, ...args);
+    inMemoryStore.set(key, { value: JSON.stringify(list) });
+    return original - list.length;
   }
 
   async zcard(key: string) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      return existing ? JSON.parse(existing).length : 0;
-    }
-    return (this.client as Redis).zcard(key);
+    const existing = await inMemory.get(key);
+    return existing ? JSON.parse(existing).length : 0;
   }
 
   async zrevrange<T>(key: string, start: number, stop: number): Promise<T[]> {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return [];
-      const list = JSON.parse(existing);
-      const result = list.slice(start, stop === -1 ? undefined : stop + 1).reverse();
-      return result.map((m: any) => {
-        try { return JSON.parse(m.member || m); } catch { return m.member || m; }
-      }) as T[];
-    }
-    const items = await (this.client as Redis).zrevrange(key, start, stop);
-    return items.map(item => {
-      try { return JSON.parse(item); } catch { return item; }
+    const existing = await inMemory.get(key);
+    if (!existing) return [];
+    const list = JSON.parse(existing);
+    const result = list.slice(start, stop === -1 ? undefined : stop + 1).reverse();
+    return result.map((m: any) => {
+      try { return JSON.parse(m.member || m); } catch { return m.member || m; }
     }) as T[];
   }
 
   async zremrangebyscore(key: string, min: number, max: number) {
-    if (this.isInMemory) {
-      const existing = await inMemory.get(key);
-      if (!existing) return 0;
-      const list: { score: number; member: string }[] = JSON.parse(existing);
-      const filtered = list.filter(m => m.score < min || m.score > max);
-      inMemoryStore.set(key, { value: JSON.stringify(filtered) });
-      return list.length - filtered.length;
-    }
-    return (this.client as Redis).zremrangebyscore(key, min, max);
+    const existing = await inMemory.get(key);
+    if (!existing) return 0;
+    const list: { score: number; member: string }[] = JSON.parse(existing);
+    const filtered = list.filter(m => m.score < min || m.score > max);
+    inMemoryStore.set(key, { value: JSON.stringify(filtered) });
+    return list.length - filtered.length;
   }
 
   async zrank(key: string, member: unknown) {
@@ -234,11 +170,8 @@ export class RedisClient {
   }
 
   async publish(channel: string, message: string) {
-    if (this.isInMemory) {
-      console.log(`[Pub] ${channel}: ${message}`);
-      return 0;
-    }
-    return (this.client as Redis).publish(channel, message);
+    console.log(`[Pub] ${channel}: ${message}`);
+    return 0;
   }
 
   async getRaw(key: string) {
@@ -246,12 +179,8 @@ export class RedisClient {
   }
 
   async quit() {
-    if (!this.isInMemory) {
-      await (this.client as Redis).quit();
-    } else {
-      inMemoryStore.clear();
-    }
+    inMemoryStore.clear();
   }
 }
 
-export const redisClient = RedisClient.getInstance(process.env.REDIS_URL);
+export const redisClient = RedisClient.getInstance();
