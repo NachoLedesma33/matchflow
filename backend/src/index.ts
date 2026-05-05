@@ -7,6 +7,7 @@ import { apiRoutes } from './api/routes';
 import { triggerWebhook } from './api/routes/webhooks';
 import { MetricsCollector } from './utils/MetricsCollector';
 import { MatchResult, MatchMode } from './types';
+import path from 'path';
 
 const PORT = process.env.PORT || 3001;
 const REDIS_URL = process.env.REDIS_URL || undefined;
@@ -30,6 +31,9 @@ let metricsCollector: MetricsCollector | null = null;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const frontendPath = path.join(__dirname, '../frontend/dist');
+app.use(express.static(frontendPath));
+
 app.use((req, res, next) => {
   if (NODE_ENV === 'production' && !req.path.startsWith('/debug')) {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
@@ -39,12 +43,16 @@ app.use((req, res, next) => {
 
 app.use(apiRoutes);
 
-app.get('/', (_req, res) => {
+app.get('/api', (_req, res) => {
   res.json({
     name: 'MatchFlow API',
     version: '1.0.0',
     status: 'running',
   });
+});
+
+app.get('/', (_req, res) => {
+res.sendFile(path.join(frontendPath, 'index.html'));
 });
 
 async function initializeServices() {
