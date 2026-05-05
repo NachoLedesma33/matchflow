@@ -35,9 +35,7 @@ Thumbs.db
 # Backend-specific
 backend/dist/
 backend/*.log
-
-# Frontend-specific  
-frontend/dist/
+redis/
 
 # Test coverage
 coverage/

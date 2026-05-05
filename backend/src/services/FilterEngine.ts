@@ -57,3 +57,5 @@ export function applyAllFilters(
 
   return { passed, rejected };
 }
+
+export const FilterEngine = { applyFilters, filterCandidates, applyAllFilters };

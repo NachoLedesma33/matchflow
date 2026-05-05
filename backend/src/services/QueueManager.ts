@@ -14,7 +14,8 @@ export class QueueManager {
   }
 
   async addToQueue(userId: string, entry: QueueEntry): Promise<void> {
-    const key = this.getQueueKey(entry.teamMembers ? 'group' : 'solo', entry.teamMembers?.length || 1);
+    const mode: MatchMode = entry.teamMembers ? 'ranked-flex' : 'ranked-solo';
+    const key = this.getQueueKey(mode, (entry.teamMembers?.length || 1) as TeamSize);
     const scoredEntry = {
       ...entry,
       priorityBonus: Math.min(entry.priorityBonus, this.MAX_PRIORITY_BONUS)
@@ -63,7 +64,7 @@ export class QueueManager {
   }
 
   async getAllQueues(): Promise<{ mode: MatchMode; teamSize: TeamSize; count: number }[]> {
-    const modes: MatchMode[] = ['fast', 'precise', 'mixed'];
+    const modes: MatchMode[] = ['ranked-solo', 'ranked-flex', 'casual', 'tournament'];
     const sizes: TeamSize[] = [1, 2, 3];
     const result: { mode: MatchMode; teamSize: TeamSize; count: number }[] = [];
 
@@ -92,7 +93,7 @@ export class QueueManager {
   }
 
   private async updatePriorities(): Promise<void> {
-    const modes: MatchMode[] = ['fast', 'precise', 'mixed'];
+    const modes: MatchMode[] = ['ranked-solo', 'ranked-flex', 'casual', 'tournament'];
     const sizes: TeamSize[] = [1, 2, 3];
 
     for (const mode of modes) {
@@ -110,7 +111,7 @@ export class QueueManager {
     }
   }
 
-  private getQueueKey(mode: MatchMode, teamSize: TeamSize): string {
+  private getQueueKey(mode: MatchMode, teamSize: any): string {
     return `${this.QUEUE_PREFIX}:${mode}:${teamSize}`;
   }
 

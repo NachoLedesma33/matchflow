@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { userRoutes } from './routes/users';
-import { webhookRoutes } from './routes/webhooks';
-import { debugRoutes } from './routes/debug';
+import { userRoutes } from './users';
+import { webhookRoutes } from './webhooks';
+import { debugRoutes } from './debug';
 
 const router = Router();
 

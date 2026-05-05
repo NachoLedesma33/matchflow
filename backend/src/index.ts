@@ -50,9 +50,13 @@ app.get('/', (_req, res) => {
 async function initializeServices() {
   console.log('Initializing services...');
 
-  redisClient = RedisClient.getInstance(REDIS_URL);
-  await redisClient.ping();
-  console.log('Redis connected');
+  try {
+    redisClient = RedisClient.getInstance(REDIS_URL);
+    console.log('Redis client initialized');
+  } catch (err) {
+    console.log('Using in-memory fallback');
+    redisClient = RedisClient.getInstance();
+  }
 
   matchingEngine = new MatchingEngine(REDIS_URL);
   matchingEngine.setMatchCallback(handleMatchFound);
@@ -79,7 +83,7 @@ async function handleMatchFound(match: MatchResult) {
 
   if (metricsCollector) {
     const waitTime = (match.timestamp - Date.now()) / 1000;
-    await metricsCollector.recordMatch(match.players.length > 2 ? 'mixed' : 'fast', waitTime, match.score, true);
+    await metricsCollector.recordMatch(match.players.length > 2 ? 'ranked-flex' : 'ranked-solo', waitTime, match.score, true);
   }
 }
 

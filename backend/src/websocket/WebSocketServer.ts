@@ -3,9 +3,8 @@ import { Server as HttpServer } from 'http';
 import Redis from 'ioredis';
 import { QueueManager } from '../services/QueueManager';
 import { HybridMatcher } from '../algorithms/HybridMatcher';
-import { TeamBalancer } from '../services/TeamBalancer';
-import { FilterEngine } from '../services/FilterEngine';
-import { applyFilters, filterCandidates } from '../services/FilterEngine';
+import { balanceTeams, TeamBalancer } from '../services/TeamBalancer';
+import { applyFilters, filterCandidates, FilterEngine } from '../services/FilterEngine';
 import {
   UserProfile,
   MatchRequest,

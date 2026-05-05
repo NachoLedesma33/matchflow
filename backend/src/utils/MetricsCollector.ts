@@ -96,7 +96,7 @@ export class MetricsCollector {
     acceptanceRate: number;
     totalMatches: number;
   }[]> {
-    const modes: MatchMode[] = mode ? [mode] : ['fast', 'precise', 'mixed'];
+    const modes: MatchMode[] = mode ? [mode] : ['ranked-solo', 'ranked-flex', 'casual', 'tournament'];
     const result = [];
 
     for (const m of modes) {

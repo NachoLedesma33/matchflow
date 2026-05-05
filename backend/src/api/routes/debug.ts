@@ -88,7 +88,7 @@ function generateRandomUser(): UserProfile {
 
 router.post('/debug/simulate', async (req: Request, res: Response) => {
   try {
-    const { userCount = 20, teamSize = 1, mode = 'fast' } = req.body;
+    const { userCount = 20, teamSize = 4, mode = 'ranked-solo' } = req.body;
 
     if (process.env.NODE_ENV === 'production') {
       res.status(403).json({ error: 'Debug endpoints not available in production' });

@@ -26,8 +26,8 @@ export interface UserProfile {
   weights: Weights;
 }
 
-export type MatchMode = 'fast' | 'precise' | 'mixed';
-export type TeamSize = 1 | 2 | 3;
+export type MatchMode = 'ranked-solo' | 'ranked-flex' | 'casual' | 'tournament';
+export type TeamSize = 1 | 2 | 3 | 4 | 5;
 
 export interface MatchFilters {
   minLevel?: number;
@@ -64,8 +64,10 @@ export interface MatchResult {
 }
 
 export interface Feedback {
+  userId: string;
   matchId: string;
   rating: number;
   report?: string;
   wouldPlayAgain: boolean;
+  result?: 'win' | 'loss' | 'draw';
 }

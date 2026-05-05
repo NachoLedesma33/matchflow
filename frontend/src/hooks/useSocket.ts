@@ -121,7 +121,7 @@ export function useSocket(userId: string) {
       setWaitingTime(data.time);
     });
 
-    newSocket.on('session-restored', (data: { mode: string; teamSize: number }) => {
+    newSocket.on('session-restored', (_data: { mode: string; teamSize: number }) => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
       }

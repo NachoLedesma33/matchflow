@@ -1,7 +1,7 @@
 import Redis from 'ioredis';
 import { QueueManager } from './QueueManager';
 import { HybridMatcher } from '../algorithms/HybridMatcher';
-import { TeamBalancer, calculateTeamSkill, calculateSkillDifference } from './TeamBalancer';
+import { balanceTeams, calculateTeamSkill, calculateSkillDifference, TeamBalancer } from './TeamBalancer';
 import { applyFilters, filterCandidates } from './FilterEngine';
 import { ScoreCalculator } from './ScoreCalculator';
 import {
@@ -31,9 +31,10 @@ export class MatchingEngine {
   private onMatchFound?: (result: MatchResult) => void;
 
   private readonly INTERVALS = {
-    fast: 1000,
-    precise: 5000,
-    mixed: 2000
+    'ranked-solo': 30000,
+    'ranked-flex': 30000,
+    casual: 15000,
+    tournament: 60000
   };
 
   constructor(redisUrl?: string) {
@@ -54,7 +55,7 @@ export class MatchingEngine {
   start(): void {
     console.log('MatchingEngine started');
 
-    for (const mode of ['fast', 'precise', 'mixed'] as MatchMode[]) {
+    for (const mode of ['ranked-solo', 'ranked-flex', 'casual', 'tournament'] as MatchMode[]) {
       for (const size of [1, 2, 3] as TeamSize[]) {
         const key = `${mode}:${size}`;
         const interval = this.INTERVALS[mode];
@@ -218,7 +219,7 @@ export class MatchingEngine {
   private async notifyMatch(match: MatchResult): Promise<void> {
     const key = `match:${match.matchId}`;
     const socketIds = match.players.map(p => `user:${p}`);
-    this.redis.publish('match:notify', JSON.stringify({ match, sockets }));
+    this.redis.publish('match:notify', JSON.stringify({ match, socketIds }));
   }
 
   private async removeFromQueue(userId: string): Promise<void> {

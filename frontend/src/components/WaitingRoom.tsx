@@ -20,7 +20,7 @@ interface WaitingRoomProps {
 
 const CLICKER_STORAGE_KEY = 'matchflow_clicker_score';
 
-export function WaitingRoom({ userId, waitingTime, queueSize, onSendMessage, socket }: WaitingRoomProps) {
+export function WaitingRoom({ userId, waitingTime, queueSize, onSendMessage: _onSendMessage, socket }: WaitingRoomProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [clicks, setClicks] = useState(() => {
@@ -30,7 +30,8 @@ export function WaitingRoom({ userId, waitingTime, queueSize, onSendMessage, soc
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const handleChatMessage = (msg: ChatMessage) => {
+    const handleChatMessage = (data: unknown) => {
+      const msg = data as ChatMessage;
       setMessages(prev => [...prev, msg]);
     };
 

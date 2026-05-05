@@ -76,3 +76,7 @@ export function calculateSkillDifference(teams: UserProfile[][]): number {
 
   return maxSkill - minSkill;
 }
+
+export const TeamBalancer = { balanceTeams, calculateTeamSkill, calculateSkillDifference };
+
+const TeamBalancerDummy = TeamBalancer;

@@ -1,24 +1,33 @@
 import { Feedback } from '../types';
 import { redisClient } from './RedisClient';
+import { GlickoSimplified } from '../algorithms/GlickoSimplified';
 
 const USER_REP_PREFIX = 'user:reputation';
 const FEEDBACK_HISTORY_PREFIX = 'feedback:history';
 const QUEUE_REPLAY_PREFIX = 'queue:replay';
+const USER_PROFILE_PREFIX = 'user:profile';
 const REPORT_THRESHOLD = 3;
 const TOXICITY_PENALTY = 10;
 const MIN_REPUTATION = 0;
 const MAX_REPUTATION = 100;
 
 export class FeedbackProcessor {
-  async processFeedback(feedback: Feedback): Promise<{ updatedReputation: number; alert?: string }> {
+  async processFeedback(feedback: Feedback): Promise<{ updatedReputation: number; alert?: string; ratingChange?: number }> {
     const matchKey = `match:${feedback.matchId}`;
-    const match = await redisClient.get<{ players: string[] }>(matchKey);
+    const match = await redisClient.get<{ players: string[]; teamAssignment?: { teamId: number; players: string[] }[] }>(matchKey);
 
     if (!match) {
       throw new Error('Match not found');
     }
 
-    const otherPlayers = match.players.filter(p => p !== feedback.matchId);
+    const userId = feedback.userId || 'unknown';
+    let ratingChange = 0;
+
+    if (feedback.result) {
+      ratingChange = await this.updateSkillRating(userId, feedback.result, match);
+    }
+
+    const otherPlayers = match.players.filter(p => p !== userId);
 
     for (const playerId of otherPlayers) {
       await this.updateReputation(playerId, feedback.rating);
@@ -38,7 +47,37 @@ export class FeedbackProcessor {
       ? await this.getReputation(otherPlayers[0])
       : 50;
 
-    return { updatedReputation: finalReputation };
+    return { updatedReputation: finalReputation, ratingChange };
+  }
+
+  private async updateSkillRating(userId: string, result: 'win' | 'loss' | 'draw', match: { players: string[]; teamAssignment?: { teamId: number; players: string[] }[] }): Promise<number> {
+    const profileKey = `${USER_PROFILE_PREFIX}:${userId}`;
+    const profile = await redisClient.get<{ skillRating: { rating: number; rd: number; volatility: number } }>(profileKey);
+
+    const currentRating = profile?.skillRating || { rating: 1500, rd: 200, volatility: 0.06 };
+    
+    const opponentRatings = match.players
+      .filter(p => p !== userId)
+      .map(async (opponentId) => {
+        const oppProfile = await redisClient.get<{ skillRating: { rating: number; rd: number } }>(`${USER_PROFILE_PREFIX}:${opponentId}`);
+        return oppProfile?.skillRating || { rating: 1500, rd: 200 };
+      });
+
+    const opponents = await Promise.all(opponentRatings);
+    const numericResult = result === 'win' ? 1 : result === 'loss' ? 0 : 0.5;
+
+    const updatedRating = GlickoSimplified.calculateMultipleMatches(
+      currentRating,
+      opponents.map(o => ({ rating: o.rating, rd: o.rd })),
+      opponents.map(() => numericResult)
+    );
+
+    await redisClient.setex(profileKey, 86400 * 30, {
+      ...profile,
+      skillRating: updatedRating
+    });
+
+    return updatedRating.rating - currentRating.rating;
   }
 
   private async updateReputation(userId: string, rating: number): Promise<void> {
@@ -109,7 +148,8 @@ export class FeedbackProcessor {
     const keys = await redisClient.keys(`${FEEDBACK_HISTORY_PREFIX}:*`);
     const feedbackList: Feedback[] = [];
 
-    for (const key of keys.slice(0, limit)) {
+    const keyArray = Array.from(keys).slice(0, limit);
+    for (const key of keyArray) {
       const feedback = await redisClient.get<Feedback>(key);
       if (feedback) {
         feedbackList.push(feedback);
