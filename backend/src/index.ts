@@ -1,7 +1,6 @@
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import Redis from 'ioredis';
 import { RedisClient } from './services/RedisClient';
 import { MatchingEngine } from './services/MatchingEngine';
 import { apiRoutes } from './api/routes';
@@ -9,17 +8,6 @@ import { triggerWebhook } from './api/routes/webhooks';
 import { MetricsCollector } from './utils/MetricsCollector';
 import { MatchResult, MatchMode } from './types';
 import path from 'path';
-
-// Silenciar errores de Redis en producción
-if (process.env.NODE_ENV === 'production') {
-  const originalRedis = Redis;
-  Redis = class extends originalRedis {
-    constructor(...args: any[]) {
-      super(...args);
-      this.on('error', () => {});
-    }
-  };
-}
 
 const PORT = process.env.PORT || 3001;
 const REDIS_URL = process.env.REDIS_URL || undefined;
